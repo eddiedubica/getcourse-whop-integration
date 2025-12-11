@@ -1,139 +1,81 @@
 const express = require('express');
 const router = express.Router();
-const axios = require('axios');
+const WhopAPI = require('../utils/whopApi');
+const GetCourseAPI = require('../utils/getcourseApi');
 
-/**
- * Create Whop checkout from GetCourse order
- * GET/POST /api/create-checkout
- * 
- * Expected parameters from GetCourse:
- * - deal_number: Order number
- * - user_email: User email
- * - user_name: User name (optional)
- * - deal_cost: Order amount
- * - offer_id: Offer ID (optional)
- * - offer_title: Offer title (optional)
- * - callback_secret: Security token (optional)
- */
-router.all('/create-checkout', async (req, res) => {
-  try {
-    // Get parameters from both GET and POST
-    const params = { ...req.query, ...req.body };
-    
-    console.log('[CREATE-CHECKOUT] Received request:', params);
-    
-    // Validate required parameters
-    if (!params.deal_number || !params.user_email || !params.deal_cost) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing required parameters',
-        required: ['deal_number', 'user_email', 'deal_cost']
-      });
+// Initialize APIs (assuming environment variables are set)
+const whopApi = new WhopAPI(process.env.WHOP_API_KEY, process.env.WHOP_COMPANY_ID);
+const getcourseApi = new GetCourseAPI(process.env.GETCOURSE_API_KEY, process.env.GETCOURSE_DOMAIN);
+
+// Функция для очистки суммы от символов валюты и преобразования в число
+const cleanAmount = (amountString) => {
+    if (!amountString) return 0;
+    // Удаляем все, кроме цифр, точки и запятой. Затем заменяем запятую на точку.
+    let cleaned = amountString.replace(/[^\d.,]/g, '').replace(',', '.');
+    // Парсим как число с плавающей точкой
+    return parseFloat(cleaned) || 0;
+};
+
+router.get('/', async (req, res) => {
+    const { deal_number, user_email, deal_cost, user_name, offer_title } = req.query;
+
+    // 1. Basic validation
+    if (!deal_number || !user_email || !deal_cost) {
+        console.error('[CREATE-CHECKOUT] Missing required parameters');
+        return res.status(400).json({ success: false, error: 'Missing required parameters', required: ['deal_number', 'user_email', 'deal_cost'] });
     }
-    
-    // Optional: Verify callback secret for security
-    if (process.env.GETCOURSE_CALLBACK_SECRET) {
-      if (params.callback_secret !== process.env.GETCOURSE_CALLBACK_SECRET) {
-        console.error('[CREATE-CHECKOUT] Invalid callback secret');
-        return res.status(403).json({
-          success: false,
-          error: 'Unauthorized'
+
+    // НОВОЕ: Очистка суммы перед использованием
+    const cleaned_deal_cost = cleanAmount(deal_cost);
+
+    console.log('[CREATE-CHECKOUT] Received request: ', { deal_number, user_email, deal_cost, cleaned_deal_cost, user_name, offer_title });
+
+    try {
+        // 2. Create Whop Checkout Configuration
+        const checkoutResult = await whopApi.createCheckoutConfiguration({
+            amount: cleaned_deal_cost, // <-- ИСПОЛЬЗУЕМ ОЧИЩЕННУЮ СУММУ
+            planType: 'one_time',
+            redirectUrl: `${process.env.RENDER_EXTERNAL_URL}/api/whop-webhook`, // Success URL
+            metadata: {
+                deal_number,
+                user_email,
+                user_name,
+                offer_title
+            }
         });
-      }
-    }
-    
-    // Parse deal cost (remove currency symbols, convert to cents)
-    const dealCostFloat = parseFloat(params.deal_cost.toString().replace(/[^0-9.]/g, ''));
-    const dealCostCents = Math.round(dealCostFloat * 100);
-    
-    // Create checkout configuration in Whop
-    const whopResponse = await createWhopCheckout({
-      dealNumber: params.deal_number,
-      userEmail: params.user_email,
-      userName: params.user_name || '',
-      amount: dealCostCents,
-      offerId: params.offer_id || '',
-      offerTitle: params.offer_title || 'Order'
-    });
-    
-    if (!whopResponse.success) {
-      throw new Error(whopResponse.error || 'Failed to create Whop checkout');
-    }
-    
-    console.log('[CREATE-CHECKOUT] Whop checkout created:', whopResponse.checkoutUrl);
-    
-    // Return checkout URL for redirect
-    res.json({
-      success: true,
-      checkout_url: whopResponse.checkoutUrl,
-      plan_id: whopResponse.planId,
-      checkout_config_id: whopResponse.checkoutConfigId
-    });
-    
-  } catch (error) {
-    console.error('[CREATE-CHECKOUT] Error:', error.message);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
 
-/**
- * Create checkout in Whop via API
- */
-async function createWhopCheckout(data) {
-  try {
-    // Create checkout configuration
-    const response = await axios.post(
-      'https://api.whop.com/v1/checkout_configurations',
-      {
-        plan: {
-          company_id: process.env.WHOP_COMPANY_ID,
-          initial_price: data.amount,
-          plan_type: 'one_time',
-          release_method: 'buy_now'
-        },
-        metadata: {
-          deal_number: data.dealNumber,
-          user_email: data.userEmail,
-          user_name: data.userName,
-          offer_id: data.offerId,
-          offer_title: data.offerTitle,
-          source: 'getcourse'
-        },
-        redirect_url: process.env.SUCCESS_REDIRECT_URL,
-        cancel_url: process.env.CANCEL_REDIRECT_URL
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${process.env.WHOP_API_KEY}`,
-          'Content-Type': 'application/json'
+        if (!checkoutResult.success) {
+            console.error('[WHOP-API] Error creating checkout: ', checkoutResult.error);
+            // 3. Update GetCourse with error (optional, but good practice)
+            // await getcourseApi.updateOrder(deal_number, { comment: `Ошибка Whop: ${JSON.stringify(checkoutResult.error)}` });
+            return res.status(400).json({ success: false, error: checkoutResult.error });
         }
-      }
-    );
-    
-    const checkoutConfig = response.data;
-    const planId = checkoutConfig.plan.id;
-    const checkoutConfigId = checkoutConfig.id;
-    
-    // Generate checkout URL
-    const checkoutUrl = `https://whop.com/checkout/${planId}?checkout_config=${checkoutConfigId}`;
-    
-    return {
-      success: true,
-      checkoutUrl,
-      planId,
-      checkoutConfigId
-    };
-    
-  } catch (error) {
-    console.error('[WHOP-API] Error creating checkout:', error.response?.data || error.message);
-    return {
-      success: false,
-      error: error.response?.data?.message || error.message
-    };
-  }
-}
+
+        const { plan_id, checkout_config_id } = checkoutResult.data;
+
+        // 4. Generate Checkout URL
+        const checkoutUrl = whopApi.generateCheckoutUrl(plan_id, checkout_config_id);
+
+        // 5. Update GetCourse Order with Checkout URL
+        const updateResult = await getcourseApi.updateOrder(deal_number, {
+            whop_checkout_url: checkoutUrl,
+            comment: `Ссылка Whop создана: ${checkoutUrl}`
+        });
+
+        if (!updateResult.success) {
+            console.error('[GETCOURSE-API] Error updating order: ', updateResult.error);
+            return res.status(500).json({ success: false, error: 'Checkout created, but failed to update GetCourse order.' });
+        }
+
+        console.log('[CREATE-CHECKOUT] Success. Checkout URL: ', checkoutUrl);
+        
+        // 6. Respond to GetCourse
+        return res.json({ success: true, checkout_url: checkoutUrl });
+
+    } catch (error) {
+        console.error('[CREATE-CHECKOUT] Internal Server Error: ', error);
+        return res.status(500).json({ success: false, error: 'Internal Server Error' });
+    }
+});
 
 module.exports = router;
