@@ -10,7 +10,7 @@ class WhopAPI {
   /**
    * Create a checkout configuration
    */
-  async createCheckoutConfiguration(options) {
+  async createCheckoutConfiguration(options ) {
     try {
       const response = await axios.post(
         `${this.baseUrl}/checkout_configurations`,
@@ -19,11 +19,12 @@ class WhopAPI {
             company_id: this.companyId,
             initial_price: options.amount,
             plan_type: options.planType || 'one_time',
-            release_method: 'buy_now'
+            release_method: 'buy_now',
+            currency: 'USD' // <-- ИСПРАВЛЕНО: Добавлена валюта USD
           },
           metadata: options.metadata || {},
           redirect_url: options.redirectUrl,
-          cancel_url: options.cancelUrl
+          // cancel_url: options.cancelUrl // <-- ИСПРАВЛЕНО: Удалено лишнее поле
         },
         {
           headers: {
@@ -55,7 +56,7 @@ class WhopAPI {
   /**
    * Get payment details
    */
-  async getPayment(paymentId) {
+  async getPayment(paymentId ) {
     try {
       const response = await axios.get(
         `${this.baseUrl}/payments/${paymentId}`,
