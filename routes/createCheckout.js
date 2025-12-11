@@ -46,7 +46,18 @@ router.all('/create-checkout', async (req, res) => {
     
     console.log('[CREATE-CHECKOUT] Whop checkout created:', whopResponse.checkoutUrl);
     
-    // Save checkout URL back to GetCourse order
+    // Опция 1: Прямой редирект на Whop (раскомментируйте это)
+    // res.redirect(302, whopResponse.checkoutUrl);
+    
+    // Опция 2: Вернуть JSON с URL (для использования с JavaScript)
+    res.json({
+      success: true,
+      checkout_url: whopResponse.checkoutUrl,
+      session_id: whopResponse.sessionId
+    });
+    
+    // Опция 3: Сохранить в GetCourse и использовать доп. поле (закомментировано)
+    /*
     const saveResult = await saveCheckoutUrlToOrder(
       params.deal_number,
       params.user_email,
@@ -55,17 +66,8 @@ router.all('/create-checkout', async (req, res) => {
     
     if (saveResult.success) {
       console.log('[CREATE-CHECKOUT] Checkout URL saved to GetCourse order');
-    } else {
-      console.error('[CREATE-CHECKOUT] Failed to save URL to order:', saveResult.error);
     }
-    
-    // Return success response
-    res.json({
-      success: true,
-      checkout_url: whopResponse.checkoutUrl,
-      session_id: whopResponse.sessionId,
-      saved_to_order: saveResult.success
-    });
+    */
     
   } catch (error) {
     console.error('[CREATE-CHECKOUT] Error:', error.message);
@@ -77,14 +79,36 @@ router.all('/create-checkout', async (req, res) => {
 });
 
 /**
+ * Select plan based on price
+ */
+function selectPlanByPrice(dealCost) {
+  // Парсим цену
+  const price = parseFloat(dealCost.toString().replace(/[^0-9.]/g, ''));
+  
+  // Выбираем план по цене
+  if (price >= 9997) return process.env.WHOP_PLAN_9997 || 'plan_kUSaoXKGavfht'; // $9997
+  if (price >= 3997) return process.env.WHOP_PLAN_3997 || 'plan_waaMKQH22eDJK'; // $3997
+  if (price >= 1997) return process.env.WHOP_PLAN_1997 || 'plan_avmd2tOmTwVTB'; // $1997
+  if (price >= 997) return process.env.WHOP_PLAN_997 || 'plan_SGVT1cWHcicSo'; // $997
+  
+  // По умолчанию самый дешёвый
+  return process.env.WHOP_PLAN_997 || 'plan_SGVT1cWHcicSo';
+}
+
+/**
  * Create checkout session in Whop via API v2
  */
 async function createWhopCheckout(data) {
   try {
+    // Выбираем нужный план по цене
+    const planId = selectPlanByPrice(data.dealCost);
+    
+    console.log(`[WHOP-API] Selected plan ${planId} for price ${data.dealCost}`);
+    
     const response = await axios.post(
       'https://api.whop.com/v2/checkout_sessions',
       {
-        plan_id: process.env.WHOP_PLAN_ID || 'plan_SGVT1cWHcicSo',
+        plan_id: planId,
         metadata: {
           deal_number: data.dealNumber,
           user_email: data.userEmail,
