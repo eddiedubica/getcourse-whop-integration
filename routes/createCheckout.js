@@ -46,11 +46,25 @@ router.all('/create-checkout', async (req, res) => {
     
     console.log('[CREATE-CHECKOUT] Whop checkout created:', whopResponse.checkoutUrl);
     
-    // Return checkout URL for redirect
+    // Save checkout URL back to GetCourse order
+    const saveResult = await saveCheckoutUrlToOrder(
+      params.deal_number,
+      params.user_email,
+      whopResponse.checkoutUrl
+    );
+    
+    if (saveResult.success) {
+      console.log('[CREATE-CHECKOUT] Checkout URL saved to GetCourse order');
+    } else {
+      console.error('[CREATE-CHECKOUT] Failed to save URL to order:', saveResult.error);
+    }
+    
+    // Return success response
     res.json({
       success: true,
       checkout_url: whopResponse.checkoutUrl,
-      session_id: whopResponse.sessionId
+      session_id: whopResponse.sessionId,
+      saved_to_order: saveResult.success
     });
     
   } catch (error) {
@@ -91,10 +105,13 @@ async function createWhopCheckout(data) {
     
     const session = response.data;
     
-    // Whop может вернуть URL в разных полях
-    const checkoutUrl = session.checkout_url || session.url || session.payment_url;
+    console.log('[WHOP-API] Session created successfully:', session);
+    
+    // Whop v2 возвращает purchase_url для перенаправления
+    const checkoutUrl = session.purchase_url || session.checkout_url || session.url;
     
     if (!checkoutUrl) {
+      console.error('[WHOP-API] No URL in response:', JSON.stringify(session));
       throw new Error('No checkout URL returned from Whop');
     }
     
@@ -119,6 +136,65 @@ async function createWhopCheckout(data) {
 }
 
 /**
+ * Save checkout URL back to GetCourse order
+ */
+async function saveCheckoutUrlToOrder(dealNumber, userEmail, checkoutUrl) {
+  try {
+    // Проверяем наличие API ключа GetCourse
+    if (!process.env.GETCOURSE_API_KEY) {
+      console.warn('[GETCOURSE-API] API key not configured, skipping save');
+      return { success: false, error: 'API key not configured' };
+    }
+    
+    const params = {
+      user: {
+        email: userEmail
+      },
+      deal: {
+        deal_number: dealNumber,
+        addfields: {
+          "whop_checkout_url": checkoutUrl
+        }
+      }
+    };
+    
+    const paramsBase64 = Buffer.from(JSON.stringify(params)).toString('base64');
+    
+    const response = await axios.post(
+      `https://${process.env.GETCOURSE_ACCOUNT || 'course.coral-santoro'}.com/pl/api/deals`,
+      new URLSearchParams({
+        action: 'add',
+        key: process.env.GETCOURSE_API_KEY,
+        params: paramsBase64
+      }),
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        }
+      }
+    );
+    
+    console.log('[GETCOURSE-API] Checkout URL saved to order:', response.data);
+    
+    return {
+      success: response.data.success === true || response.data.success === 'true',
+      data: response.data
+    };
+    
+  } catch (error) {
+    console.error('[GETCOURSE-API] Error saving checkout URL:', {
+      message: error.message,
+      response: error.response?.data
+    });
+    
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+/**
  * Webhook from Whop after successful payment
  * POST /api/whop-webhook
  */
@@ -132,12 +208,13 @@ router.post('/whop-webhook', async (req, res) => {
     if (event.type === 'payment.succeeded' || event.type === 'checkout.completed') {
       const metadata = event.data?.metadata || {};
       const dealNumber = metadata.deal_number;
+      const userEmail = metadata.user_email;
       
-      if (dealNumber) {
+      if (dealNumber && userEmail) {
         console.log(`[WHOP-WEBHOOK] Payment succeeded for deal ${dealNumber}`);
         
-        // TODO: Update GetCourse order status to "paid"
-        // await updateGetCourseOrder(dealNumber, 'payed');
+        // Update GetCourse order status to "paid"
+        await updateGetCourseOrderStatus(dealNumber, userEmail, 'payed');
       }
     }
     
@@ -151,13 +228,18 @@ router.post('/whop-webhook', async (req, res) => {
 });
 
 /**
- * Update GetCourse order status (для будущего использования)
+ * Update GetCourse order status
  */
-async function updateGetCourseOrder(dealNumber, status) {
+async function updateGetCourseOrderStatus(dealNumber, userEmail, status) {
   try {
+    if (!process.env.GETCOURSE_API_KEY) {
+      console.warn('[GETCOURSE-API] API key not configured, skipping update');
+      return;
+    }
+    
     const params = {
       user: {
-        email: "" // нужен email пользователя
+        email: userEmail
       },
       deal: {
         deal_number: dealNumber,
@@ -168,7 +250,7 @@ async function updateGetCourseOrder(dealNumber, status) {
     const paramsBase64 = Buffer.from(JSON.stringify(params)).toString('base64');
     
     const response = await axios.post(
-      'https://course.coral-santoro.com/pl/api/deals',
+      `https://${process.env.GETCOURSE_ACCOUNT || 'course.coral-santoro'}.com/pl/api/deals`,
       new URLSearchParams({
         action: 'add',
         key: process.env.GETCOURSE_API_KEY,
@@ -181,11 +263,11 @@ async function updateGetCourseOrder(dealNumber, status) {
       }
     );
     
-    console.log('[GETCOURSE-API] Order updated:', response.data);
+    console.log('[GETCOURSE-API] Order status updated:', response.data);
     return response.data;
     
   } catch (error) {
-    console.error('[GETCOURSE-API] Error updating order:', error.message);
+    console.error('[GETCOURSE-API] Error updating order status:', error.message);
     throw error;
   }
 }
