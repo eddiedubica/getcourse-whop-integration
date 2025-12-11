@@ -7,15 +7,6 @@ const GetCourseAPI = require('../utils/getcourseApi');
 const whopApi = new WhopAPI(process.env.WHOP_API_KEY, process.env.WHOP_COMPANY_ID);
 const getcourseApi = new GetCourseAPI(process.env.GETCOURSE_API_KEY, process.env.GETCOURSE_DOMAIN);
 
-// Функция для очистки суммы от символов валюты и преобразования в число
-const cleanAmount = (amountString) => {
-    if (!amountString) return 0;
-    // Удаляем все, кроме цифр, точки и запятой. Затем заменяем запятую на точку.
-    let cleaned = amountString.replace(/[^\d.,]/g, '').replace(',', '.');
-    // Парсим как число с плавающей точкой
-    return parseFloat(cleaned) || 0;
-};
-
 router.get('/', async (req, res) => {
     const { deal_number, user_email, deal_cost, user_name, offer_title } = req.query;
 
@@ -25,17 +16,15 @@ router.get('/', async (req, res) => {
         return res.status(400).json({ success: false, error: 'Missing required parameters', required: ['deal_number', 'user_email', 'deal_cost'] });
     }
 
-    // НОВОЕ: Очистка суммы перед использованием
-    const cleaned_deal_cost = cleanAmount(deal_cost);
-
-    console.log('[CREATE-CHECKOUT] Received request: ', { deal_number, user_email, deal_cost, cleaned_deal_cost, user_name, offer_title });
+    console.log('[CREATE-CHECKOUT] Received request: ', { deal_number, user_email, deal_cost, user_name, offer_title });
 
     try {
         // 2. Create Whop Checkout Configuration
         const checkoutResult = await whopApi.createCheckoutConfiguration({
-            amount: cleaned_deal_cost, // <-- ИСПОЛЬЗУЕМ ОЧИЩЕННУЮ СУММУ
+            amount: deal_cost,
             planType: 'one_time',
             redirectUrl: `${process.env.RENDER_EXTERNAL_URL}/api/whop-webhook`, // Success URL
+            cancelUrl: `${process.env.RENDER_EXTERNAL_URL}/api/whop-webhook`, // Cancel URL
             metadata: {
                 deal_number,
                 user_email,
