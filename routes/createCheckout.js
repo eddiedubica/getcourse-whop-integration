@@ -34,6 +34,7 @@ router.all('/create-checkout', async (req, res) => {
     const whopResponse = await createWhopCheckout({
       dealNumber: params.deal_number,
       userEmail: params.user_email,
+      userPhone: params.user_phone,
       userName: params.user_name || '',
       dealCost: params.deal_cost || '',
       offerTitle: params.offer_title || 'Order',
@@ -112,6 +113,7 @@ async function createWhopCheckout(data) {
         metadata: {
           deal_number: data.dealNumber,
           user_email: data.userEmail,
+          userphone: data.user_Phone
           user_name: data.userName,
           deal_cost: data.dealCost,
           offer_title: data.offerTitle,
