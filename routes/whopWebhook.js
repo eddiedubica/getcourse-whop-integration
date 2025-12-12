@@ -9,20 +9,16 @@ const crypto = require('crypto');
  */
 router.post('/whop-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   try {
-    console.log('[WHOP-WEBHOOK] Received webhook');
-
-    // Получаем webhook-сигнатуру и прочие параметры
     const signature = req.headers['webhook-signature'];
     const timestamp = req.headers['webhook-timestamp'];
     const webhookId = req.headers['webhook-id'];
 
-    // Читаем тело запроса
     const rawBody = req.body.toString('utf8');
     const event = JSON.parse(rawBody);
 
     console.log('[WHOP-WEBHOOK] Event:', event);
 
-    // Проверяем сигнатуру, если секрет задан
+    // Verify webhook signature
     if (process.env.WHOP_WEBHOOK_SECRET) {
       const isValid = verifyWhopWebhook(signature, timestamp, webhookId, rawBody);
       if (!isValid) {
@@ -31,7 +27,6 @@ router.post('/whop-webhook', express.raw({ type: 'application/json' }), async (r
       }
     }
 
-    // Обрабатываем событие payment.succeeded
     if (event.type === 'payment.succeeded') {
       const paymentData = event.data;
       const metadata = paymentData.metadata || {};
@@ -44,38 +39,32 @@ router.post('/whop-webhook', express.raw({ type: 'application/json' }), async (r
       }
     }
 
-    // Возвращаем успешный ответ
     res.status(200).json({ success: true, received: true });
 
   } catch (err) {
     console.error('[WHOP-WEBHOOK] Error:', err.message);
-    // Возвращаем 200 даже при ошибке, чтобы Whop не пытался снова отправить запрос
     res.status(200).json({ success: false, error: err.message });
   }
 });
 
 /**
- * Проверка сигнатуры Webhook для Whop
+ * Verify Whop webhook signature using Standard Webhooks specification
  */
 function verifyWhopWebhook(signature, timestamp, webhookId, body) {
   try {
-    if (!signature || !timestamp) {
-      console.error('[WHOP-WEBHOOK] Missing signature or timestamp');
-      return false;
-    }
+    if (!signature || !timestamp) return false;
 
-    const secret = Buffer.from(process.env.WHOP_WEBHOOK_SECRET, 'base64'); // Исправлено здесь
+    // Secret key for signature verification
+    const secret = Buffer.from(process.env.WHOP_WEBHOOK_SECRET, 'base64');
     const signedContent = `${webhookId}.${timestamp}.${body}`;
-    const expectedSignature = crypto
-      .createHmac('sha256', secret)
-      .update(signedContent)
-      .digest('base64');
+    const expectedSignature = crypto.createHmac('sha256', secret)
+                                     .update(signedContent)
+                                     .digest('base64');
 
-    console.log('[WHOP-WEBHOOK] Expected signature:', expectedSignature);
-
-    // Сравниваем сигнатуры
+    // Check if the calculated signature matches the signature in the header
     const signatures = signature.split(',');
     return signatures.some(sig => sig.trim() === `v1=${expectedSignature}`);
+
   } catch (error) {
     console.error('[WHOP-WEBHOOK] Signature verification error:', error.message);
     return false;
@@ -83,12 +72,14 @@ function verifyWhopWebhook(signature, timestamp, webhookId, body) {
 }
 
 /**
- * Обновление статуса заказа в GetCourse
+ * Update order status in GetCourse via API
  */
 async function updateGetCourseOrder(dealNumber, userEmail, status) {
   try {
-    const accountName = process.env.GETCOURSE_ACCOUNT;
-    const apiKey = process.env.GETCOURSE_API_KEY;
+    if (!process.env.GETCOURSE_API_KEY || !process.env.GETCOURSE_ACCOUNT) {
+      console.warn('[GETCOURSE-API] API key or account name not configured');
+      return { success: false, error: 'API key or account name not configured' };
+    }
 
     const orderData = {
       user: { email: userEmail },
@@ -98,9 +89,9 @@ async function updateGetCourseOrder(dealNumber, userEmail, status) {
     const params = Buffer.from(JSON.stringify(orderData)).toString('base64');
 
     const response = await axios.post(
-      `https://${accountName}.getcourse.ru/pl/api/deals`,
+      `https://${process.env.GETCOURSE_ACCOUNT}.getcourse.ru/pl/api/deals`,
       null,
-      { params: { action: 'add', key: apiKey, params } }
+      { params: { action: 'add', key: process.env.GETCOURSE_API_KEY, params } }
     );
 
     console.log('[GETCOURSE-API] Order updated:', response.data);
