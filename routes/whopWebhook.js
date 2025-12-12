@@ -9,13 +9,20 @@ const crypto = require('crypto');
  */
 router.post('/whop-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   try {
+    console.log('[WHOP-WEBHOOK] Received webhook');
+
+    // Получаем webhook-сигнатуру и прочие параметры
     const signature = req.headers['webhook-signature'];
     const timestamp = req.headers['webhook-timestamp'];
     const webhookId = req.headers['webhook-id'];
 
+    // Читаем тело запроса
     const rawBody = req.body.toString('utf8');
     const event = JSON.parse(rawBody);
 
+    console.log('[WHOP-WEBHOOK] Event:', event);
+
+    // Проверяем сигнатуру, если секрет задан
     if (process.env.WHOP_WEBHOOK_SECRET) {
       const isValid = verifyWhopWebhook(signature, timestamp, webhookId, rawBody);
       if (!isValid) {
@@ -24,6 +31,7 @@ router.post('/whop-webhook', express.raw({ type: 'application/json' }), async (r
       }
     }
 
+    // Обрабатываем событие payment.succeeded
     if (event.type === 'payment.succeeded') {
       const paymentData = event.data;
       const metadata = paymentData.metadata || {};
@@ -36,25 +44,36 @@ router.post('/whop-webhook', express.raw({ type: 'application/json' }), async (r
       }
     }
 
+    // Возвращаем успешный ответ
     res.status(200).json({ success: true, received: true });
 
   } catch (err) {
     console.error('[WHOP-WEBHOOK] Error:', err.message);
+    // Возвращаем 200 даже при ошибке, чтобы Whop не пытался снова отправить запрос
     res.status(200).json({ success: false, error: err.message });
   }
 });
 
 /**
- * Verify Whop webhook signature using Standard Webhooks specification
+ * Проверка сигнатуры Webhook для Whop
  */
 function verifyWhopWebhook(signature, timestamp, webhookId, body) {
   try {
-    if (!signature || !timestamp) return false;
+    if (!signature || !timestamp) {
+      console.error('[WHOP-WEBHOOK] Missing signature or timestamp');
+      return false;
+    }
 
-    const secret = Buffer.from(process.env.WHOP_WEBHOOK_SECRET, 'base64');
+    const secret = Buffer.from(process.env.WHOP_WEBHOOK_SECRET, 'base64'); // Исправлено здесь
     const signedContent = `${webhookId}.${timestamp}.${body}`;
-    const expectedSignature = crypto.createHmac('sha256', secret).update(signedContent).digest('base64');
+    const expectedSignature = crypto
+      .createHmac('sha256', secret)
+      .update(signedContent)
+      .digest('base64');
 
+    console.log('[WHOP-WEBHOOK] Expected signature:', expectedSignature);
+
+    // Сравниваем сигнатуры
     const signatures = signature.split(',');
     return signatures.some(sig => sig.trim() === `v1=${expectedSignature}`);
   } catch (error) {
@@ -64,15 +83,10 @@ function verifyWhopWebhook(signature, timestamp, webhookId, body) {
 }
 
 /**
- * Update GetCourse order status
+ * Обновление статуса заказа в GetCourse
  */
 async function updateGetCourseOrder(dealNumber, userEmail, status) {
   try {
-    if (!process.env.GETCOURSE_API_KEY || !process.env.GETCOURSE_ACCOUNT) {
-      console.warn('[GETCOURSE-API] API key or account name not configured');
-      return { success: false, error: 'API key or account name not configured' };
-    }
-
     const accountName = process.env.GETCOURSE_ACCOUNT;
     const apiKey = process.env.GETCOURSE_API_KEY;
 
@@ -80,21 +94,20 @@ async function updateGetCourseOrder(dealNumber, userEmail, status) {
       user: { email: userEmail },
       deal: { deal_number: dealNumber, deal_status: status }
     };
+
     const params = Buffer.from(JSON.stringify(orderData)).toString('base64');
 
     const response = await axios.post(
       `https://${accountName}.getcourse.ru/pl/api/deals`,
       null,
-      {
-        params: { action: 'add', key: apiKey, params }
-      }
+      { params: { action: 'add', key: apiKey, params } }
     );
 
     console.log('[GETCOURSE-API] Order updated:', response.data);
     return response.data;
 
   } catch (err) {
-    console.error('[GETCOURSE-API] Error updating order:', err.response?.data || err.message);
+    console.error('[GETCOURSE-API] Error:', err.response?.data || err.message);
     return { success: false, error: err.message };
   }
 }
