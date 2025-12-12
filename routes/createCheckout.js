@@ -113,7 +113,7 @@ async function createWhopCheckout(data) {
         metadata: {
           deal_number: data.dealNumber,
           user_email: data.userEmail,
-          userphone: data.user_Phone
+          userphone: data.user_Phone,
           user_name: data.userName,
           deal_cost: data.dealCost,
           offer_title: data.offerTitle,
