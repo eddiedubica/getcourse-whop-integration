@@ -1,22 +1,20 @@
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors'); // ← ДОБАВЬТЕ ЭТУ СТРОКУ
+const cors = require('cors');
 const bodyParser = require('body-parser');
-const axios = require('axios');
-const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
-app.use(cors()); // ← ДОБАВЬТЕ ЭТУ СТРОКУ (перед другими middleware!)
+app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
 // Logging middleware
 app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
-  next();
+console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+next();
 });
 
 // Import routes
@@ -31,27 +29,27 @@ app.use('/api', healthCheck);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('[ERROR]', err);
-  res.status(500).json({
-    success: false,
-    error: 'Internal server error',
-    message: err.message
-  });
+console.error('[ERROR]', err);
+res.status(500).json({
+success: false,
+error: 'Internal server error',
+message: err.message
+});
 });
 
 // 404 handler
 app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    error: 'Not found'
-  });
+res.status(404).json({
+success: false,
+error: 'Not found'
+});
 });
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`🚀 GetCourse-Whop Integration Server running on port ${PORT}`);
-  console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
+console.log(`🚀 Server running on port ${PORT}`);
+console.log(`📝 Env: ${process.env.NODE_ENV || 'development'}`);
+console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
 });
 
 module.exports = app;
