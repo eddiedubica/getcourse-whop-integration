@@ -3,14 +3,13 @@ const router = express.Router();
 const axios = require('axios');
 
 /**
- * Временная база для хранения checkout_url
- * В продакшене лучше заменить на Redis/MongoDB
+ * Temporary DB for checkout_url (in RAM)
  */
 const checkoutDB = {}; // { email: checkout_url }
 
 /**
- * Create Whop checkout from GetCourse order
- * GET/POST /api/create-checkout
+ * CREATE CHECKOUT
+ * /api/create-checkout
  */
 router.all('/create-checkout', async (req, res) => {
   try {
@@ -25,11 +24,10 @@ router.all('/create-checkout', async (req, res) => {
       });
     }
 
-    // Создаём checkout в Whop
     const whopResponse = await createWhopCheckout({
       dealNumber: params.deal_number,
       userEmail: params.user_email,
-      userPhone: params.user_phone,
+      userPhone: params.user_phone || '',
       userName: params.user_name || '',
       dealCost: params.deal_cost || '',
       offerTitle: params.offer_title || 'Order',
@@ -37,15 +35,11 @@ router.all('/create-checkout', async (req, res) => {
     });
 
     if (!whopResponse.success) {
-      throw new Error(whopResponse.error || 'Failed to create Whop checkout');
+      throw new Error(whopResponse.error);
     }
 
-    console.log('[CREATE-CHECKOUT] Whop checkout created:', whopResponse.checkoutUrl);
-
-    // Сохраняем checkout_url в памяти
     checkoutDB[params.user_email] = whopResponse.checkoutUrl;
 
-    // Возвращаем JSON с ссылкой
     res.json({
       success: true,
       checkout_url: whopResponse.checkoutUrl,
@@ -53,33 +47,31 @@ router.all('/create-checkout', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('[CREATE-CHECKOUT] Error:', error.message);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    console.error('[CREATE-CHECKOUT] Error:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
 /**
- * GET /api/get-checkout
- * Возвращает checkout_url по email для страницы GC
+ * GET CHECKOUT BY EMAIL
  */
-router.get("/get-checkout", (req, res) => {
+router.get('/get-checkout', (req, res) => {
   const email = req.query.email;
-  if (!email) return res.status(400).json({ status: "error", error: "Email required" });
+  if (!email) return res.status(400).json({ status: 'error', error: 'Email required' });
 
   const checkout_url = checkoutDB[email];
-  if (!checkout_url) return res.json({ status: "pending" });
+  if (!checkout_url) return res.json({ status: 'pending' });
 
-  return res.json({ status: "ok", checkout_url });
+  return res.json({ status: 'ok', checkout_url });
 });
 
 /**
- * Select plan based on price
+ * PLAN SELECTOR
  */
 function selectPlanByPrice(dealCost) {
   const price = parseFloat(dealCost.toString().replace(/[^0-9.]/g, ''));
+
+  console.log('[PLAN-SELECT] Parsed:', price);
 
   if (price >= 9997) return process.env.WHOP_PLAN_9997 || 'plan_kUSaoXKGavfht';
   if (price >= 3997) return process.env.WHOP_PLAN_3997 || 'plan_waaMKQH22eDJK';
@@ -91,13 +83,13 @@ function selectPlanByPrice(dealCost) {
 }
 
 /**
- * Create checkout session in Whop via API v2
+ * CREATE WHOP CHECKOUT
  */
 async function createWhopCheckout(data) {
   try {
     const planId = selectPlanByPrice(data.dealCost);
 
-    console.log(`[WHOP-API] Selected plan ${planId} for price ${data.dealCost}`);
+    console.log(`[WHOP-API] Selected plan ${planId}`);
 
     const response = await axios.post(
       'https://api.whop.com/v2/checkout_sessions',
@@ -106,7 +98,7 @@ async function createWhopCheckout(data) {
         metadata: {
           deal_number: data.dealNumber,
           user_email: data.userEmail,
-          userphone: data.userPhone,
+          user_phone: data.userPhone,
           user_name: data.userName,
           deal_cost: data.dealCost,
           offer_title: data.offerTitle,
@@ -116,35 +108,22 @@ async function createWhopCheckout(data) {
       },
       {
         headers: {
-          'Authorization': `Bearer ${process.env.WHOP_API_KEY}`,
+          Authorization: `Bearer ${process.env.WHOP_API_KEY}`,
           'Content-Type': 'application/json'
         }
       }
     );
 
     const session = response.data;
-    console.log('[WHOP-API] Session created successfully:', session);
 
-    const checkoutUrl = session.purchase_url || session.checkout_url || session.url;
+    const url = session.purchase_url || session.checkout_url || session.url;
 
-    if (!checkoutUrl) {
-      console.error('[WHOP-API] No URL in response:', JSON.stringify(session));
-      throw new Error('No checkout URL returned from Whop');
-    }
+    if (!url) throw new Error('No checkout URL returned from Whop');
 
-    return {
-      success: true,
-      checkoutUrl: checkoutUrl,
-      sessionId: session.id
-    };
+    return { success: true, checkoutUrl: url, sessionId: session.id };
 
   } catch (error) {
-    console.error('[WHOP-API] Error creating checkout:', {
-      message: error.message,
-      response: error.response?.data,
-      status: error.response?.status
-    });
-
+    console.error('[WHOP-API] ERROR:', error.response?.data || error.message);
     return {
       success: false,
       error: error.response?.data?.message || error.message
@@ -153,22 +132,20 @@ async function createWhopCheckout(data) {
 }
 
 /**
- * Webhook from Whop after successful payment
- * POST /api/whop-webhook
+ * WHOP WEBHOOK
  */
 router.post('/whop-webhook', async (req, res) => {
   try {
-    console.log('[WHOP-WEBHOOK] Received webhook:', req.body);
+    console.log('[WHOP-WEBHOOK] Received:', req.body);
 
     const event = req.body;
 
-    if (event.type === 'payment.succeeded' || event.type === 'checkout.completed') {
+    if (['payment.succeeded', 'checkout.completed'].includes(event.type)) {
       const metadata = event.data?.metadata || {};
       const dealNumber = metadata.deal_number;
       const userEmail = metadata.user_email;
 
       if (dealNumber && userEmail) {
-        console.log(`[WHOP-WEBHOOK] Payment succeeded for deal ${dealNumber}`);
         await updateGetCourseOrderStatus(dealNumber, userEmail, 'payed');
       }
     }
@@ -182,24 +159,24 @@ router.post('/whop-webhook', async (req, res) => {
 });
 
 /**
- * Update GetCourse order status
+ * UPDATE ORDER IN GETCOURSE
  */
 async function updateGetCourseOrderStatus(dealNumber, userEmail, status) {
   try {
     if (!process.env.GETCOURSE_API_KEY) {
-      console.warn('[GETCOURSE-API] API key not configured, skipping update');
+      console.warn('No GC API key, skipping update');
       return;
     }
 
-    const params = {
+    const payload = {
       user: { email: userEmail },
       deal: { deal_number: dealNumber, deal_status: status }
     };
 
-    const paramsBase64 = Buffer.from(JSON.stringify(params)).toString('base64');
+    const paramsBase64 = Buffer.from(JSON.stringify(payload)).toString('base64');
 
     const response = await axios.post(
-      `https://${process.env.GETCOURSE_ACCOUNT || 'course.coral-santoro'}.com/pl/api/deals`,
+      `https://${process.env.GETCOURSE_ACCOUNT}.com/pl/api/deals`,
       new URLSearchParams({
         action: 'add',
         key: process.env.GETCOURSE_API_KEY,
@@ -210,11 +187,10 @@ async function updateGetCourseOrderStatus(dealNumber, userEmail, status) {
       }
     );
 
-    console.log('[GETCOURSE-API] Order status updated:', response.data);
-    return response.data;
+    console.log('[GETCOURSE-API] Updated:', response.data);
 
   } catch (error) {
-    console.error('[GETCOURSE-API] Error updating order status:', error.message);
+    console.error('[GETCOURSE-API] ERROR:', error.message);
     throw error;
   }
 }
