@@ -1,5 +1,6 @@
 require('dotenv').config();
 const express = require('express');
+const cors = require('cors'); // ← ДОБАВЬТЕ ЭТУ СТРОКУ
 const bodyParser = require('body-parser');
 const axios = require('axios');
 const crypto = require('crypto');
@@ -8,6 +9,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
+app.use(cors()); // ← ДОБАВЬТЕ ЭТУ СТРОКУ (перед другими middleware!)
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
