@@ -85,8 +85,9 @@ function selectPlanByPrice(dealCost) {
   if (price >= 3997) return process.env.WHOP_PLAN_3997 || 'plan_waaMKQH22eDJK';
   if (price >= 1997) return process.env.WHOP_PLAN_1997 || 'plan_avmd2tOmTwVTB';
   if (price >= 997) return process.env.WHOP_PLAN_997 || 'plan_SGVT1cWHcicSo';
+  if (price >= 1) return process.env.WHOP_PLAN_1 || 'plan_yZnItTo7XpLWr';
 
-  return process.env.WHOP_PLAN_997 || 'plan_SGVT1cWHcicSo';
+  return process.env.WHOP_PLAN_1 || 'plan_yZnItTo7XpLWr';
 }
 
 /**
