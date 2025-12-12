@@ -12,12 +12,11 @@ router.post('/whop-webhook', express.raw({ type: 'application/json' }), async (r
     const signature = req.headers['webhook-signature'];
     const timestamp = req.headers['webhook-timestamp'];
     const webhookId = req.headers['webhook-id'];
-
     const rawBody = req.body.toString('utf8');
     const event = JSON.parse(rawBody);
-
+    
     console.log('[WHOP-WEBHOOK] Event:', event);
-
+    
     // Verify webhook signature
     if (process.env.WHOP_WEBHOOK_SECRET) {
       const isValid = verifyWhopWebhook(signature, timestamp, webhookId, rawBody);
@@ -26,21 +25,21 @@ router.post('/whop-webhook', express.raw({ type: 'application/json' }), async (r
         return res.status(401).json({ success: false, error: 'Invalid signature' });
       }
     }
-
+    
     if (event.type === 'payment.succeeded') {
       const paymentData = event.data;
       const metadata = paymentData.metadata || {};
       const dealNumber = metadata.deal_number;
       const userEmail = metadata.user_email;
-
+      
       if (dealNumber && userEmail) {
-        console.log(`[WHOP-WEBHOOK] Payment succeeded for ${dealNumber}`);
+        console.log(`[WHOP-WEBHOOK] Payment succeeded for ${dealNumber}`); // ← ИСПРАВЛЕНО
         await updateGetCourseOrder(dealNumber, userEmail, 'payed');
       }
     }
-
+    
     res.status(200).json({ success: true, received: true });
-
+    
   } catch (err) {
     console.error('[WHOP-WEBHOOK] Error:', err.message);
     res.status(200).json({ success: false, error: err.message });
@@ -53,18 +52,18 @@ router.post('/whop-webhook', express.raw({ type: 'application/json' }), async (r
 function verifyWhopWebhook(signature, timestamp, webhookId, body) {
   try {
     if (!signature || !timestamp) return false;
-
+    
     // Secret key for signature verification
     const secret = Buffer.from(process.env.WHOP_WEBHOOK_SECRET, 'base64');
     const signedContent = `${webhookId}.${timestamp}.${body}`;
     const expectedSignature = crypto.createHmac('sha256', secret)
                                      .update(signedContent)
                                      .digest('base64');
-
+    
     // Check if the calculated signature matches the signature in the header
     const signatures = signature.split(',');
     return signatures.some(sig => sig.trim() === `v1=${expectedSignature}`);
-
+    
   } catch (error) {
     console.error('[WHOP-WEBHOOK] Signature verification error:', error.message);
     return false;
@@ -80,23 +79,31 @@ async function updateGetCourseOrder(dealNumber, userEmail, status) {
       console.warn('[GETCOURSE-API] API key or account name not configured');
       return { success: false, error: 'API key or account name not configured' };
     }
-
+    
     const orderData = {
       user: { email: userEmail },
       deal: { deal_number: dealNumber, deal_status: status }
     };
-
+    
     const params = Buffer.from(JSON.stringify(orderData)).toString('base64');
-
+    
     const response = await axios.post(
       `https://${process.env.GETCOURSE_ACCOUNT}.getcourse.ru/pl/api/deals`,
-      null,
-      { params: { action: 'add', key: process.env.GETCOURSE_API_KEY, params } }
+      new URLSearchParams({ // ← ИСПРАВЛЕНО: правильный формат для GetCourse API
+        action: 'add',
+        key: process.env.GETCOURSE_API_KEY,
+        params: params
+      }),
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        }
+      }
     );
-
+    
     console.log('[GETCOURSE-API] Order updated:', response.data);
     return response.data;
-
+    
   } catch (err) {
     console.error('[GETCOURSE-API] Error:', err.response?.data || err.message);
     return { success: false, error: err.message };
