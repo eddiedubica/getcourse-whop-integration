@@ -8,37 +8,37 @@ const pendingCheckouts = new Map();
 /**
  * Функция для выбора плана Whop по стоимости заказа
  * 
- * Доступные планы:
- * - $9.97 (WHOP_PLAN_9997) - для заказов от $7
- * - $39.97 (WHOP_PLAN_3997) - для заказов от $25
- * - $199.97 (WHOP_PLAN_1997) - для заказов от $150
- * - $1.00 (WHOP_PLAN_997) - для заказов до $6.99 (бюджетный)
+ * Доступные планы (реальные цены):
+ * - $997 (WHOP_PLAN_997) - для заказов $0-1000
+ * - $1,997 (WHOP_PLAN_1997) - для заказов $1001-3000
+ * - $3,997 (WHOP_PLAN_3997) - для заказов $3001-5000
+ * - $9,997 (WHOP_PLAN_9997) - для заказов $5001+
  */
 function selectWhopPlanByPrice(amountUSD) {
   const plans = {
     plan_997: {
       id: process.env.WHOP_PLAN_997,
       minPrice: 0,
-      maxPrice: 6.99,
-      name: '$1.00 Plan'
-    },
-    plan_3997: {
-      id: process.env.WHOP_PLAN_3997,
-      minPrice: 7,
-      maxPrice: 149.99,
-      name: '$39.97 Plan'
+      maxPrice: 1000,
+      name: '$997 Plan'
     },
     plan_1997: {
       id: process.env.WHOP_PLAN_1997,
-      minPrice: 150,
-      maxPrice: 199.99,
-      name: '$199.97 Plan'
+      minPrice: 1001,
+      maxPrice: 3000,
+      name: '$1,997 Plan'
+    },
+    plan_3997: {
+      id: process.env.WHOP_PLAN_3997,
+      minPrice: 3001,
+      maxPrice: 5000,
+      name: '$3,997 Plan'
     },
     plan_9997: {
       id: process.env.WHOP_PLAN_9997,
-      minPrice: 200,
-      maxPrice: 99999,
-      name: '$9.97 Plan (Premium)'
+      minPrice: 5001,
+      maxPrice: 999999,
+      name: '$9,997 Plan'
     }
   };
   
@@ -55,7 +55,7 @@ function selectWhopPlanByPrice(amountUSD) {
   // Fallback на самый дорогой план если цена выше всех
   return {
     planId: process.env.WHOP_PLAN_9997,
-    planName: '$9.97 Plan (Premium)',
+    planName: '$9,997 Plan',
     planKey: 'plan_9997'
   };
 }
@@ -146,7 +146,7 @@ router.all('/create-checkout', async (req, res) => {
       dealNumber: params.deal_number,
       userEmail: params.user_email,
       userName: params.user_name || '',
-      amount: dealCostUSD, // Передаём в USD, т.к. в Whop план уже имеет цену
+      amount: dealCostUSD,
       amountCents: dealCostCents,
       offerId: params.offer_id || '',
       offerTitle: params.offer_title || 'Order',
