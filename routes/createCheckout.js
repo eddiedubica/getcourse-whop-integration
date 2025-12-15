@@ -164,9 +164,10 @@ router.all('/create-checkout', async (req, res) => {
     
     console.log('[CREATE-CHECKOUT] Whop checkout created for session:', sessionId);
     
-    // Возвращаем редирект на страницу-прокладку
-    // GetCourse перенаправит клиента туда
-    const redirectUrl = `${process.env.BASE_URL || 'https://getcourse-whop-integration.onrender.com'}/api/waiting/${sessionId}`;
+    // Возвращаем редирект на страницу-прокладку с параметрами
+    // GetCourse перенаправит клиента туда со всеми данными
+    const baseUrl = process.env.BASE_URL || 'https://getcourse-whop-integration.onrender.com';
+    const redirectUrl = `${baseUrl}/api/waiting-page/${sessionId}?name=${encodeURIComponent(params.user_name || '')}&email=${encodeURIComponent(params.user_email)}&phone=${encodeURIComponent(params.user_phone || '')}&deal_number=${encodeURIComponent(params.deal_number)}`;
     
     res.json({
       success: true,
