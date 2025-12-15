@@ -1,18 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const axios = require('axios');
-
-// Временное хранилище сессий (в production использовать Redis)
-const pendingCheckouts = new Map();
+const { saveCheckout } = require('./checkoutStatus');
 
 /**
- * Функция для выбора плана Whop по стоимости заказа
- * 
- * Доступные планы (реальные цены):
- * - $997 (WHOP_PLAN_997) - для заказов $0-1000
- * - $1,997 (WHOP_PLAN_1997) - для заказов $1001-3000
- * - $3,997 (WHOP_PLAN_3997) - для заказов $3001-5000
- * - $9,997 (WHOP_PLAN_9997) - для заказов $5001+
+ * Выбор плана Whop по стоимости заказа
  */
 function selectWhopPlanByPrice(amountUSD) {
   const plans = {
@@ -52,7 +44,6 @@ function selectWhopPlanByPrice(amountUSD) {
     }
   }
   
-  // Fallback на самый дорогой план если цена выше всех
   return {
     planId: process.env.WHOP_PLAN_9997,
     planName: '$9,997 Plan',
@@ -61,119 +52,71 @@ function selectWhopPlanByPrice(amountUSD) {
 }
 
 /**
- * Create Whop checkout from GetCourse order
- * GET/POST /api/create-checkout
+ * Создание checkout в Whop
+ * POST /api/create-checkout
  * 
- * Expected parameters from GetCourse:
- * - deal_number: Order number (ВАЖНО! Только из GetCourse процесса)
- * - user_email: User email
- * - user_phone: User phone
- * - user_name: User name
- * - deal_cost: Order amount (в USD)
- * - offer_title: Offer title
- * - callback_secret: Security token (optional)
- * 
- * Система выбирает план Whop автоматически по стоимости заказа
+ * Параметры:
+ * - deal_number: номер заказа (требуется)
+ * - user_email: email (требуется)
+ * - user_phone: телефон (опционально)
+ * - user_name: имя (опционально)
+ * - deal_cost: сумма (требуется)
+ * - offer_title: название товара (опционально)
  */
 router.all('/create-checkout', async (req, res) => {
   try {
-    // Get parameters from both GET and POST
     const params = { ...req.query, ...req.body };
     
-    console.log('[CREATE-CHECKOUT] Received request:', {
+    console.log('[CREATE-CHECKOUT] Request:', {
       deal_number: params.deal_number,
-      user_email: params.user_email,
-      user_phone: params.user_phone,
-      deal_cost: params.deal_cost
+      deal_cost: params.deal_cost,
+      user_email: params.user_email
     });
     
-    // Validate required parameters
-    if (!params.deal_number || !params.user_email) {
+    // Валидация
+    if (!params.deal_number || !params.user_email || !params.deal_cost) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required parameters',
-        required: ['deal_number', 'user_email']
+        error: 'Missing: deal_number, user_email, deal_cost'
       });
     }
     
-    // Optional: Verify callback secret for security
-    if (process.env.GETCOURSE_CALLBACK_SECRET) {
-      if (params.callback_secret !== process.env.GETCOURSE_CALLBACK_SECRET) {
-        console.error('[CREATE-CHECKOUT] Invalid callback secret');
-        return res.status(403).json({
-          success: false,
-          error: 'Unauthorized'
-        });
-      }
-    }
+    // Парсим сумму
+    const dealCostUSD = parseFloat(params.deal_cost.toString().replace(/[^0-9.]/g, '')) || 0;
     
-    // Parse deal cost (remove currency symbols, convert to float USD)
-    const dealCostUSD = params.deal_cost ? parseFloat(params.deal_cost.toString().replace(/[^0-9.]/g, '')) : 0;
-    const dealCostCents = Math.round(dealCostUSD * 100);
-    
-    // Выбираем план Whop по стоимости заказа
+    // Выбираем план
     const selectedPlan = selectWhopPlanByPrice(dealCostUSD);
     
-    console.log('[CREATE-CHECKOUT] Plan selected:', {
-      orderAmount: dealCostUSD,
-      selectedPlan: selectedPlan.planName,
-      planId: selectedPlan.planId
-    });
+    console.log('[CREATE-CHECKOUT] Selected plan:', selectedPlan.planName, 'for amount:', dealCostUSD);
     
-    // Create session ID (уникальный для этого заказа)
-    const sessionId = `sess_${params.deal_number}_${Date.now()}`;
-    
-    // Сохраняем данные клиента в памяти сервера
-    pendingCheckouts.set(sessionId, {
-      dealNumber: params.deal_number,
-      userName: params.user_name || '',
-      userEmail: params.user_email,
-      userPhone: params.user_phone || '',
-      amount: dealCostCents,
-      amountUSD: dealCostUSD,
-      offerTitle: params.offer_title || 'Order',
-      selectedPlan: selectedPlan.planName,
-      selectedPlanId: selectedPlan.planId,
-      checkoutUrl: null,
-      createdAt: new Date(),
-      expiresAt: new Date(Date.now() + 20 * 60 * 1000) // 20 минут
-    });
-    
-    console.log('[CREATE-CHECKOUT] Session created:', sessionId);
-    
-    // Create checkout configuration in Whop
+    // Создаём checkout в Whop
     const whopResponse = await createWhopCheckout({
       dealNumber: params.deal_number,
       userEmail: params.user_email,
       userName: params.user_name || '',
       amount: dealCostUSD,
-      amountCents: dealCostCents,
-      offerId: params.offer_id || '',
       offerTitle: params.offer_title || 'Order',
-      planId: selectedPlan.planId,
-      planName: selectedPlan.planName
+      planId: selectedPlan.planId
     });
     
     if (!whopResponse.success) {
-      pendingCheckouts.delete(sessionId);
-      throw new Error(whopResponse.error || 'Failed to create Whop checkout');
+      throw new Error(whopResponse.error);
     }
     
-    // Сохраняем checkout URL в сессию
-    pendingCheckouts.get(sessionId).checkoutUrl = whopResponse.checkoutUrl;
+    // Сохраняем по deal_number для polling
+    saveCheckout(params.deal_number, {
+      amount: dealCostUSD,
+      offerTitle: params.offer_title || 'Order',
+      planName: selectedPlan.planName,
+      checkoutUrl: whopResponse.checkoutUrl
+    });
     
-    console.log('[CREATE-CHECKOUT] Whop checkout created for session:', sessionId);
+    console.log('[CREATE-CHECKOUT] Saved for polling, deal:', params.deal_number);
     
-    // Возвращаем редирект на страницу-прокладку с параметрами
-    // GetCourse перенаправит клиента туда со всеми данными
-    const baseUrl = process.env.BASE_URL || 'https://getcourse-whop-integration.onrender.com';
-    const redirectUrl = `${baseUrl}/api/waiting-page/${sessionId}?name=${encodeURIComponent(params.user_name || '')}&email=${encodeURIComponent(params.user_email)}&phone=${encodeURIComponent(params.user_phone || '')}&deal_number=${encodeURIComponent(params.deal_number)}`;
-    
+    // Просто успех - GetCourse процесс больше ничего не ждёт
     res.json({
       success: true,
-      redirect_url: redirectUrl,
-      session_id: sessionId,
-      plan_selected: selectedPlan.planName
+      message: 'Checkout created, check /api/checkout-status/:dealNumber'
     });
     
   } catch (error) {
@@ -186,33 +129,22 @@ router.all('/create-checkout', async (req, res) => {
 });
 
 /**
- * Create checkout in Whop via API
- * Используется выбранный ранее план
+ * Создание checkout в Whop API
  */
 async function createWhopCheckout(data) {
   try {
-    console.log('[WHOP-API] Creating checkout with plan:', {
-      planId: data.planId,
-      planName: data.planName,
-      dealNumber: data.dealNumber
-    });
-    
     const response = await axios.post(
       'https://api.whop.com/v1/checkout_configurations',
       {
         plan: {
-          // Используем существующий план из Whop вместо создания нового
           id: data.planId
         },
         metadata: {
           deal_number: data.dealNumber,
           user_email: data.userEmail,
           user_name: data.userName,
-          offer_id: data.offerId,
           offer_title: data.offerTitle,
-          source: 'getcourse',
-          order_amount: data.amount,
-          plan_name: data.planName
+          source: 'getcourse'
         },
         redirect_url: process.env.SUCCESS_REDIRECT_URL || 'https://getcourse.ru/success',
         cancel_url: process.env.CANCEL_REDIRECT_URL || 'https://getcourse.ru/cancel'
@@ -229,30 +161,19 @@ async function createWhopCheckout(data) {
     const checkoutConfig = response.data;
     const planId = checkoutConfig.plan?.id || data.planId;
     const checkoutConfigId = checkoutConfig.id;
-    
-    // Generate checkout URL
     const checkoutUrl = `https://whop.com/checkout/${planId}?checkout_config=${checkoutConfigId}`;
     
-    console.log('[WHOP-API] Checkout created:', { 
-      planId, 
-      checkoutConfigId,
-      planName: data.planName 
-    });
+    console.log('[WHOP-API] Checkout created for deal:', data.dealNumber);
     
     return {
       success: true,
       checkoutUrl,
       planId,
-      checkoutConfigId,
-      planName: data.planName
+      checkoutConfigId
     };
     
   } catch (error) {
-    console.error('[WHOP-API] Error creating checkout:', {
-      message: error.message,
-      status: error.response?.status,
-      data: error.response?.data
-    });
+    console.error('[WHOP-API] Error:', error.message);
     return {
       success: false,
       error: error.response?.data?.message || error.message
@@ -261,5 +182,3 @@ async function createWhopCheckout(data) {
 }
 
 module.exports = router;
-module.exports.pendingCheckouts = pendingCheckouts;
-module.exports.selectWhopPlanByPrice = selectWhopPlanByPrice;
