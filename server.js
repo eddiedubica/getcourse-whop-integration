@@ -1,7 +1,8 @@
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
 const bodyParser = require('body-parser');
+const cors = require('cors');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -11,6 +12,9 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
+// Serve static files (для HTML страниц)
+app.use(express.static(path.join(__dirname, 'public')));
+
 // Logging middleware
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
@@ -18,12 +22,14 @@ app.use((req, res, next) => {
 });
 
 // Import routes
-const createCheckout = require('./routes/createCheckout');
-const whopWebhook = require('./routes/whopWebhook');
-const healthCheck = require('./routes/healthCheck');
+const createCheckout = require('./createCheckout');
+const waitingPage = require('./waitingPage');
+const whopWebhook = require('./whopWebhook');
+const healthCheck = require('./healthCheck');
 
 // Routes
 app.use('/api', createCheckout);
+app.use('/api', waitingPage);
 app.use('/api', whopWebhook);
 app.use('/api', healthCheck);
 
@@ -49,7 +55,7 @@ app.use((req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 GetCourse-Whop Integration Server running on port ${PORT}`);
   console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
+  console.log(`🏥 Health check: http://localhost:${PORT}/api/health`);
 });
 
 module.exports = app;
