@@ -14,7 +14,7 @@ router.post('/whop-webhook', express.raw({ type: 'application/json' }), async (r
   try {
     console.log('[WHOP-WEBHOOK] Received webhook');
     
-    // Get webhook signature from headers
+    // Get webhook headers
     const signature = req.headers['webhook-signature'];
     const timestamp = req.headers['webhook-timestamp'];
     const webhookId = req.headers['webhook-id'];
@@ -24,14 +24,18 @@ router.post('/whop-webhook', express.raw({ type: 'application/json' }), async (r
     const webhookData = JSON.parse(rawBody);
     
     console.log('[WHOP-WEBHOOK] Event type:', webhookData.type);
+    console.log('[WHOP-WEBHOOK] Headers:', { webhookId, timestamp });
     
     // Verify webhook signature (Standard Webhooks)
     if (process.env.WHOP_WEBHOOK_SECRET) {
-      const isValid = verifyWhopWebhook(signature, timestamp, rawBody);
+      const isValid = verifyWhopWebhook(webhookId, signature, timestamp, rawBody);
       if (!isValid) {
         console.error('[WHOP-WEBHOOK] Invalid signature');
         return res.status(401).json({ success: false, error: 'Invalid signature' });
       }
+      console.log('[WHOP-WEBHOOK] Signature verified');
+    } else {
+      console.warn('[WHOP-WEBHOOK] Webhook secret not configured, skipping signature verification');
     }
     
     // Handle payment.succeeded event
@@ -58,10 +62,14 @@ router.post('/whop-webhook', express.raw({ type: 'application/json' }), async (r
       if (!updateResult.success) {
         console.error('[WHOP-WEBHOOK] Failed to update GetCourse order:', updateResult.error);
         // Still return 200 to Whop to avoid retries, but log the error
-        // You might want to implement a retry mechanism here
+        // In production, implement a retry queue (Bull, RabbitMQ, etc.)
       } else {
         console.log('[WHOP-WEBHOOK] GetCourse order updated successfully');
       }
+    } else if (webhookData.type === 'payment.failed') {
+      console.warn('[WHOP-WEBHOOK] Payment failed:', webhookData.data);
+    } else {
+      console.log('[WHOP-WEBHOOK] Unhandled event type:', webhookData.type);
     }
     
     // Always return 200 to Whop to acknowledge receipt
@@ -76,30 +84,49 @@ router.post('/whop-webhook', express.raw({ type: 'application/json' }), async (r
 
 /**
  * Verify Whop webhook signature using Standard Webhooks specification
+ * Format: v1,<base64-encoded-signature>
  */
-function verifyWhopWebhook(signature, timestamp, body) {
+function verifyWhopWebhook(webhookId, signature, timestamp, body) {
   try {
-    if (!signature || !timestamp) {
+    if (!signature || !timestamp || !webhookId) {
+      console.error('[WHOP-WEBHOOK] Missing signature components');
       return false;
     }
     
     // Standard Webhooks uses HMAC-SHA256
-    const secret = Buffer.from(process.env.WHOP_WEBHOOK_SECRET, 'base64');
+    const secret = process.env.WHOP_WEBHOOK_SECRET;
+    if (!secret) {
+      return false;
+    }
+    
+    // Decode base64 secret
+    const secretBytes = Buffer.from(secret, 'base64');
+    
+    // Create signed content: "webhook_id.timestamp.body"
     const signedContent = `${webhookId}.${timestamp}.${body}`;
+    
+    // Calculate expected signature
     const expectedSignature = crypto
-      .createHmac('sha256', secret)
+      .createHmac('sha256', secretBytes)
       .update(signedContent)
       .digest('base64');
     
-    // Extract signature from header (format: "v1,signature")
-    const signatures = signature.split(',');
-    for (const sig of signatures) {
-      if (sig.trim() === `v1=${expectedSignature}`) {
-        return true;
-      }
+    console.log('[WHOP-WEBHOOK] Signature verification:', {
+      received: signature,
+      expected: `v1,${expectedSignature}`
+    });
+    
+    // Parse incoming signature (format: "v1,<signature>" or just "<signature>")
+    let incomingSignature = signature;
+    if (signature.includes(',')) {
+      const parts = signature.split(',');
+      incomingSignature = parts[1] || parts[0];
     }
     
-    return false;
+    // Compare signatures
+    const isValid = incomingSignature.trim() === expectedSignature.trim();
+    
+    return isValid;
   } catch (error) {
     console.error('[WHOP-WEBHOOK] Signature verification error:', error.message);
     return false;
@@ -113,6 +140,10 @@ async function updateGetCourseOrder(data) {
   try {
     const accountName = process.env.GETCOURSE_ACCOUNT_NAME;
     const apiKey = process.env.GETCOURSE_API_KEY;
+    
+    if (!accountName || !apiKey) {
+      throw new Error('GetCourse credentials not configured');
+    }
     
     // Prepare order data
     const orderData = {
@@ -134,6 +165,12 @@ async function updateGetCourseOrder(data) {
     // Encode to base64
     const params = Buffer.from(JSON.stringify(orderData)).toString('base64');
     
+    console.log('[GETCOURSE-API] Sending order update:', {
+      dealNumber: data.dealNumber,
+      userEmail: data.userEmail,
+      paymentId: data.paymentId
+    });
+    
     // Send request to GetCourse API
     const response = await axios.post(
       `https://${accountName}.getcourse.ru/pl/api/deals`,
@@ -143,7 +180,8 @@ async function updateGetCourseOrder(data) {
           action: 'add',
           key: apiKey,
           params: params
-        }
+        },
+        timeout: 10000 // 10 second timeout
       }
     );
     
@@ -162,7 +200,11 @@ async function updateGetCourseOrder(data) {
     };
     
   } catch (error) {
-    console.error('[GETCOURSE-API] Error updating order:', error.response?.data || error.message);
+    console.error('[GETCOURSE-API] Error updating order:', {
+      message: error.message,
+      status: error.response?.status,
+      data: error.response?.data
+    });
     return {
       success: false,
       error: error.response?.data?.error_message || error.message
