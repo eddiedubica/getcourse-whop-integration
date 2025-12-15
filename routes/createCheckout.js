@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const axios = require('axios');
-const { saveCheckout } = require('./checkoutStatus');
+const checkoutStatus = require('./checkoutStatus');  // вместо require('./checkoutStatus')
 
 /**
  * Выбор плана Whop по стоимости заказа
