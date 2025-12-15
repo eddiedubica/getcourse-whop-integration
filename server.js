@@ -12,7 +12,7 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// Serve static files (для HTML страниц)
+// Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Logging middleware
@@ -22,10 +22,10 @@ app.use((req, res, next) => {
 });
 
 // Import routes
-const createCheckout = require('./createCheckout');
-const checkoutStatus = require('./checkoutStatus');
-const whopWebhook = require('./whopWebhook');
-const healthCheck = require('./healthCheck');
+const createCheckout = require('./routes/createCheckout');
+const checkoutStatus = require('./routes/checkoutStatus');
+const whopWebhook = require('./routes/whopWebhook');
+const healthCheck = require('./routes/healthCheck');
 
 // Routes
 app.use('/api', createCheckout);
