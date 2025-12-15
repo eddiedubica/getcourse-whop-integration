@@ -23,13 +23,13 @@ app.use((req, res, next) => {
 
 // Import routes
 const createCheckout = require('./createCheckout');
-const waitingPage = require('./waitingPage');
+const checkoutStatus = require('./checkoutStatus');
 const whopWebhook = require('./whopWebhook');
 const healthCheck = require('./healthCheck');
 
 // Routes
 app.use('/api', createCheckout);
-app.use('/api', waitingPage);
+app.use('/api', checkoutStatus);
 app.use('/api', whopWebhook);
 app.use('/api', healthCheck);
 
